@@ -1,0 +1,160 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Alberto L Gallotti"
+date: "5/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(lattice)
+library(caret)
+library(dplyr)
+library(parallel)
+library(foreach)
+library(iterators)
+library(doParallel)
+```
+
+##Summary
+
+In this report we analyse the execution of biceps curls with barbells, and fit a
+model based on accelerometers data, in order to predict the correct execution.
+There are 5 classes for exercise execution:
+
+- A. exactly according to the specification
+- B. throwing the elbows to the front
+- C. lifting the dumbbell only halfway
+- D. lowering the dumbbell only halfway
+- E. throwing the hips to the front
+
+Data were collected from six male participants aged between 20-28 years, with 
+little weight lifting experience, and supervised by an experienced weight lifter
+to make sure the execution complied to the manner they were supposed to simulate.
+
+
+##Model selection
+
+####Load data and split into train and validation
+Read the training set. Subdivide it further into a training set on which to
+design the model and a validation set on which to validate it before applying it
+on the actual testing set.
+```{r}
+training_set<-read.csv('pml-training.csv')
+set.seed(1234)
+intrain<-createDataPartition(training_set$classe, p=0.75, list = FALSE)
+training<-training_set[intrain,]
+validation<-training_set[-intrain,]
+```
+
+####Select variables to use in training the model (on training set)
+Remove the id columns, the subsequent columns in which there are variables not
+useful for prediction (e.g. date and time), thus the first 7 columns and the 
+columns in which there are NA values.
+```{r}
+training<-training[,-c(1:7)]
+training<-training[, colSums(is.na(training))==0]
+```
+
+Remove columns with variance near 0, which will not be useful in a predicting
+model.
+```{r}
+near0var<-nearZeroVar(training, saveMetrics=TRUE)
+training<-training[,near0var$nzv==F]
+```
+
+The variables are reduced to 52 (not including the class variable that we want to
+predict).
+
+####Model trainining: Linear Discriminant Analysis (LDA)
+Train the model on training set.
+```{r, cache=TRUE}
+model_lda<-train(classe~., data = training, method = 'lda')
+```
+
+Predict the values of validation set with the model.
+```{r}
+pred_lda<-predict(model_lda, validation)
+```
+
+```{r}
+cm_lda<-confusionMatrix(pred_lda, validation$classe)
+cm_lda
+```
+
+
+####Model trainining: Recursive Partitioning And Regression Trees (RPART)
+Train the model on training set.
+```{r, cache=TRUE}
+model_rpart<-train(classe~., data = training, method = 'rpart')
+```
+
+Predict the values of validation set with the model.
+```{r}
+pred_rpart<-predict(model_rpart, validation)
+```
+
+Analyse, through the confusion matrix, the results of the model and compare them
+with actual classes in validation set. Consider in particular the accuracy of 
+prediction.
+```{r}
+cm_rpart<-confusionMatrix(pred_rpart, validation$classe)
+cm_rpart
+```
+
+
+####Model trainining: Random Forest (RF)
+Train the model on training set.
+```{r, cache= TRUE}
+x<-training[,-53]; y<-training[,53]
+
+#Configure parallel processing
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+#Configure trainControl object
+fitControl <- trainControl(method = 'cv', number = 5, allowParallel = TRUE)
+
+#Train model
+model_rf<-train(x,y, data = training, method = 'rf', trControl = fitControl)
+
+#De-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+Predict the values of validation set with the model.
+```{r}
+pred_rf<-predict(model_rf, validation)
+```
+
+Analyse, through the confusion matrix, the results of the model and compare them
+with actual classes in validation set. Consider in particular the accuracy of 
+prediction.
+```{r}
+cm_rf<-confusionMatrix(pred_rf, validation$classe)
+cm_rf
+```
+
+
+###Fittest model based on accuracy and out-of-sample error
+According to the statistics of the 3 models, the most accurate is **Random Forest**
+with an overall accuracy of 99%. Thus the out-of-sample error is 
+**(1-0.99)x100 = 1%**.
+
+Let's use this model to predict the classes of the test set
+
+###Test set prediction
+```{r}
+test<-read.csv('./pml-testing.csv')
+```
+
+Analyse, through the confusion matrix, the results of the model and compare them
+with actual classes in validation set. Consider in particular the accuracy of 
+prediction.
+```{r}
+test_predict<-predict(model_rf,test)
+answers<-data.frame(test$problem_id,test_predict)
+answers
+```
